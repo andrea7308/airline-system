@@ -17,7 +17,7 @@ A Flask web application for managing airline reservations, flight search, custom
 ## Tech Stack
 
 - Python 3
-- Flask
+- Flask 
 - PyMySQL
 - MySQL / Aiven-hosted database
 - Pandas
