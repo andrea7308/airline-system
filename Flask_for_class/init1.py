@@ -1,6 +1,6 @@
 #Import Flask Library
 
-from flask import Flask, render_template, request, session, url_for, redirect
+from flask import Flask, g, render_template, request, session, url_for, redirect
 import pymysql.cursors
 import os
 from dotenv import load_dotenv
@@ -29,18 +29,26 @@ AIVEN_PASSWORD = os.getenv("AIVEN_PASSWORD")
 AIVEN_DB = os.getenv("AIVEN_DB")
 AIVEN_CA_PATH = os.getenv("AIVEN_CA_PATH")
 
-conn = pymysql.connect(
-	host=AIVEN_HOST,
-	port=AIVEN_PORT,
-	user=AIVEN_USER,
-	password=AIVEN_PASSWORD,
-	database=AIVEN_DB,
-	charset='utf8mb4',
-	cursorclass=pymysql.cursors.DictCursor,
-    ssl={
-        "ca": AIVEN_CA_PATH
-		}
-)
+def get_db_connection():
+	if 'db_connection' not in g:
+		g.db_connection = pymysql.connect(
+			host=AIVEN_HOST,
+			port=AIVEN_PORT,
+			user=AIVEN_USER,
+			password=AIVEN_PASSWORD,
+			database=AIVEN_DB,
+			charset='utf8mb4',
+			cursorclass=pymysql.cursors.DictCursor,
+			ssl={"ca": AIVEN_CA_PATH}
+		)
+	return g.db_connection
+
+
+@app.teardown_appcontext
+def close_db_connection(exception=None):
+	connection = g.pop('db_connection', None)
+	if connection is not None:
+		connection.close()
 
 
 #Define a route to hello function
@@ -105,7 +113,7 @@ def airlineRegAuth():
 	airlinestaff_email = request.form['airlinestaff_email']
 
 	#cursor used to send queries; general purpose connection with the db
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	# check if the username is already taken in Airline_Staff table
 	query = 'SELECT * FROM Airline_Staff WHERE username = %s;'
@@ -133,7 +141,7 @@ def airlineRegAuth():
 		ins = 'INSERT INTO Airline_Staff VALUES(%s, %s, %s, %s, %s, %s, %s);'
 		# password must be hashed before being inserted into the table; done through helper func
 		cursor.execute(ins, (admin_username, hashPass(password), first_name, last_name, dob, airlinestaff_email, airline_name))
-		conn.commit()
+		get_db_connection().commit()
 
 		# get all values for the same name attributes
 		phone_numbers = list(set(request.form.getlist('phone_number')))
@@ -145,7 +153,7 @@ def airlineRegAuth():
 				cursor.execute(query, (admin_username, phone_number))
 
 		# close the cursor's connection and commit changes
-		conn.commit()
+		get_db_connection().commit()
 		cursor.close()
 
 		# send the user to the airline staff login page
@@ -160,7 +168,7 @@ def airlineLogAuth():
 	password = hashPass(request.form['password'])
 
 	#cursor used to send queries
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	#executes query
 	query = 'SELECT * FROM Airline_Staff WHERE username = %s and password = %s;'
 	cursor.execute(query, (username, password))
@@ -184,7 +192,7 @@ def airlineLogAuth():
 def airline_staff():
 	username = session['username']
 	airline_name = session['airline_name']
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	# default for search flights:
 	curr_date = getDateTime() # helper func which gets the curr date, and puts it in the right format to query for it in the db
 	query = 'select * from Flight where departure_date_time between %s and DATE_ADD(%s, INTERVAL 30 DAY) and airline_name = %s;'
@@ -214,7 +222,7 @@ def searchFlights():
 	airline_name = session['airline_name']
 
 	# cursor used to send queries; used to interface with the database!
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	# to shorten the cases, you can either have:
 	# none (default); no input given to the search
@@ -282,12 +290,12 @@ def createFlight():
 		error2 = 'Please select an airplane from the dropdown menu'
 		return render_template('airline_staff.html', error2 = error2, airplanes=session['airplanes'])
 
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	query = 'insert into Flight values (%s, %s, %s, %s, %s, %s, %s, %s, %s)'
 	cursor.execute(query, (airplane_id, airline_name, flight_num, departure_date_time, arrival_date_time, dept_airport, arr_airport, flight_price, flight_status))
 
-	conn.commit()
+	get_db_connection().commit()
 	cursor.close()
 
 	return redirect(url_for('airline_staff')) # used redirect so that the page reloads with all the updated elements
@@ -303,7 +311,7 @@ def addAirplane():
 	age = request.form['age']
 	airplane_id = request.form['airplane_id']
 
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	# check if not already in database
 	query = 'select * from Airplane where airline_name = %s and airplane_id = %s;'
 	cursor.execute(query, (airline_name, airplane_id))
@@ -319,7 +327,7 @@ def addAirplane():
 		cursor.execute(query, (num_of_seats, manufacture_comp, age, airplane_id, airline_name))
 
 		# commit changes
-		conn.commit()
+		get_db_connection().commit()
 		
 
 		# update the value of session['airplanes'], since it now has a new airplane in it:
@@ -340,7 +348,7 @@ def toggle_status():
 	flight_num = request.form['flight_num']
 	departure_date_time = request.form['departure_date_time']
 
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	# fetch current status
 	query = 'select * from Flight where flight_num = %s and departure_date_time = %s and airline_name = %s;'
@@ -358,7 +366,7 @@ def toggle_status():
 	query = 'update Flight set flight_status = %s where flight_num = %s and departure_date_time = %s and airline_name = %s;'
 	cursor.execute(query, (new_status, flight_num, departure_date_time, airline_name))
 
-	conn.commit()
+	get_db_connection().commit()
 	cursor.close()
 
 	# load the whole page again; this time will reflect our changes
@@ -377,7 +385,7 @@ def view_reports():
 		ORDER BY month;
 	"""
 
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	cursor.execute(query, (start_date, end_date))
 	data = cursor.fetchall()
 	df = pd.DataFrame(data)
@@ -413,7 +421,7 @@ def view_ratings():
 	flight_num = request.form['flight_num']
 	departure_date_time = request.form['departure_date_time']
 
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	# for both, remember to deal with the case that no info is returned
 	# get all the ratings related to the flight
 	query = 'select rate, comment from Review where airline_name = %s and flight_num = %s and departure_date_time = %s;'
@@ -441,7 +449,7 @@ def view_customers():
 	flight_num = request.form['flight_num']
 	departure_date_time = request.form['departure_date_time']
 
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	query = '''
 	select c.customer_email, c.first_name, c.last_name, c.phone_number, c.passport_num,
 	c.passport_expiration, c.passport_country, c.dob
@@ -484,7 +492,7 @@ def registerAuthCustomer():
 	dob = request.form["dob"]
 
 	#cursor used to send queries
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	#executes query
 	query = 'SELECT * FROM Customer WHERE customer_email = %s'
 	cursor.execute(query, (customer_email))
@@ -505,7 +513,7 @@ def registerAuthCustomer():
 				passport_expiration, passport_country, dob
 				)
 		)
-		conn.commit()
+		get_db_connection().commit()
 		cursor.close()
 		return render_template('index.html')
 
@@ -517,7 +525,7 @@ def loginAuth():
 	password = hashPass(request.form['password'])
 
 	#cursor used to send queries
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	#executes query
 	query = 'SELECT * FROM Customer WHERE customer_email = %s and password = %s'
 	cursor.execute(query, (username, password))
@@ -542,7 +550,7 @@ def loginAuth():
 @protected_route
 def customerPage():
 	customer_email = session.get('username')
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	
 	query1 ="""
 			select t.ticket_id, t.airline_name, t.flight_num, 
@@ -565,7 +573,7 @@ def customerPage():
 @protected_route
 def reviewPage():
 	customer_email = session.get('username')
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	error = request.args.get('error')
 
@@ -601,7 +609,7 @@ def reviewPage():
 @app.route('/review', methods=['POST'])
 def review():
 	customer_email = session.get('username')
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	flight_info = json.loads(request.form['flight'])
 	airline_name = flight_info['airline_name']
@@ -632,7 +640,7 @@ def review():
 		 """
 
 	cursor.execute(ins, (customer_email, flight_num, departure_date_time, airline_name, rating, comment))
-	conn.commit()
+	get_db_connection().commit()
 	cursor.close()
 
 	return redirect(url_for('reviewPage'))
@@ -640,7 +648,7 @@ def review():
 @app.route('/purchaseFlight/<flight_num>', methods=['GET'])
 @protected_route
 def purchaseFlight(flight_num):
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	query = """
 			SELECT * FROM Flight
@@ -655,7 +663,7 @@ def purchaseFlight(flight_num):
 @app.route('/confirmPurchase', methods=['POST'])
 def confirmPurchase():
 	customer_email = session['username']
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 
 	airline_name = request.form['airline_name']
 	flight_num = request.form['flight_num']
@@ -733,7 +741,7 @@ def confirmPurchase():
 		departure_date_time
 	))
 	
-	conn.commit()
+	get_db_connection().commit()
 	cursor.close()
 
 	return redirect(url_for('purchaseSuccess'))
@@ -746,7 +754,7 @@ def purchaseSuccess():
 @app.route('/searchFlightsCustomer', methods=['GET', 'POST'])
 @protected_route
 def searchFlightsCustomer():
-	cursor = conn.cursor()
+	cursor = get_db_connection().cursor()
 	trip_type = request.args.get('trip_type', 'oneway')
 	dept_airport = request.args.get('dept_airport')
 	arr_airport = request.args.get('arr_airport')
@@ -756,7 +764,7 @@ def searchFlightsCustomer():
 	outbound_flights = []
 	return_flights = []
 	if dept_airport and arr_airport and depart_date:
-		cursor = conn.cursor(pymysql.cursors.DictCursor)
+		cursor = get_db_connection().cursor(pymysql.cursors.DictCursor)
 		outbound_query = """
 			SELECT 
 				f.airline_name,
@@ -790,7 +798,7 @@ def searchFlightsCustomer():
 		cursor.execute(outbound_query, (dept_airport, arr_airport, depart_date))
 		outbound_flights = cursor.fetchall()
 	if trip_type == 'roundtrip' and return_date:
-		cursor = conn.cursor(pymysql.cursors.DictCursor)
+		cursor = get_db_connection().cursor(pymysql.cursors.DictCursor)
 		return_query = """
 			SELECT 
 				f.airline_name,
@@ -846,7 +854,7 @@ def search_flights():
 	outbound_flights = []
 	return_flights = []
 	if dept_airport and arr_airport and depart_date:
-		cursor = conn.cursor(pymysql.cursors.DictCursor)
+		cursor = get_db_connection().cursor(pymysql.cursors.DictCursor)
 		outbound_query = """
             SELECT *
             FROM Flight
@@ -857,7 +865,7 @@ def search_flights():
 		cursor.execute(outbound_query, (dept_airport, arr_airport, depart_date))
 		outbound_flights = cursor.fetchall()
 	if trip_type == 'roundtrip' and return_date:
-		cursor = conn.cursor(pymysql.cursors.DictCursor)
+		cursor = get_db_connection().cursor(pymysql.cursors.DictCursor)
 		return_query = """
                 SELECT *
                 FROM Flight
